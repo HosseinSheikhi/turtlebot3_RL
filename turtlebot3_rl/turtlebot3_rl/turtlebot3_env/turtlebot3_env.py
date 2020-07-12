@@ -1,4 +1,4 @@
-from geometry_msgs.msg import Pose, Twist
+from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 
@@ -7,6 +7,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, qos_profile_sensor_data
 from turtlebot3_msgs.srv import Dqn
 from turtlebot3_msgs.srv import Goal
+from std_srvs.srv import Empty
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
 import numpy as np
@@ -18,6 +19,7 @@ class RLEnvironment(Node):
     A node which has to act as an interface between (rl_agent and simulator_agent)
     It has to implement make(), step(), and reset() like as an environment implemented in OpenAI gym
     """
+
     def __init__(self):
         super().__init__('rl_environment')
         """**************************************************************
@@ -27,16 +29,15 @@ class RLEnvironment(Node):
         self.goal_pose_y = 0.0
         self.robot_pose_x = 0.0
         self.robot_pose_y = 0.0
-        self.robot_pose_theta = 0.0
 
         self.action_size = 5
         self.done = False
         self.fail = False
         self.succeed = False
-
+        self.time_out = 300
         self.goal_angle = 0.0
         self.goal_distance = 1.0
-        self.init_goal_distance = 1.0
+        self.init_goal_distance = 0.25
         self.scan_ranges = []
         self.min_obstacle_distance = 10.0
 
@@ -60,20 +61,30 @@ class RLEnvironment(Node):
         self.clients_callback_group = MutuallyExclusiveCallbackGroup()
         self.task_succeed_client = self.create_client(Goal, 'task_succeed', callback_group=self.clients_callback_group)
         self.task_failed_client = self.create_client(Goal, 'task_failed', callback_group=self.clients_callback_group)
-        self.initialize_environment_client = self.create_client(Goal, 'initialize_env', callback_group=self.clients_callback_group)
+        self.initialize_environment_client = self.create_client(Goal, 'initialize_env',
+                                                                callback_group=self.clients_callback_group)
 
         # Initialize service
         self.rl_agent_interface_service = self.create_service(Dqn, 'rl_agent_interface',
                                                               self.rl_agent_interface_callback)
 
-        # initialize env
+        self.make_environment_service = self.create_service(Empty, 'make_environment', self.make_environment_callback)
+        self.reset_environment_service = self.create_service(Dqn, 'reset_environment', self.reset_environment_callback)
+
+    def make_environment_callback(self, request, response):
+        """
+        gives service to the rl_agent to make the environment by calling initialize_environment() function
+        :param request: Empty
+        :param response: Empty
+        """
         self.initialize_environment()
+        return response
 
     def initialize_environment(self):
         """
-        When the node is instantiated this client will send a request to the gazebo_interface service
+        This method will be called just from environment_make_callback()
+        initialize_environment_client will send a request to the gazebo_interface service
         the client waits until gets back the response (goal position) form service
-        :return:
         """
         while not self.initialize_environment_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn('service for initialize the environment is not available, waiting ...')
@@ -89,6 +100,16 @@ class RLEnvironment(Node):
             self.goal_pose_x = response.pose_x
             self.goal_pose_y = response.pose_y
             self.get_logger().info('goal initialized at [%f, %f]' % (self.goal_pose_x, self.goal_pose_y))
+
+    def reset_environment_callback(self, request, response):
+        """
+        gives service to the rl_agent reset environment
+        :param request: Dqn request
+        :param response: Dqn response
+        :return:
+        """
+        response.state = self.calculate_state()
+        return response
 
     def call_task_succeed(self):
         """
@@ -158,25 +179,12 @@ class RLEnvironment(Node):
         """
         self.robot_pose_x = msg.pose.pose.position.x
         self.robot_pose_y = msg.pose.pose.position.y
-        _, _, self.robot_pose_theta = self.euler_from_quaternion(msg.pose.pose.orientation)
 
         goal_distance = math.sqrt(
             (self.goal_pose_x - self.robot_pose_x) ** 2
             + (self.goal_pose_y - self.robot_pose_y) ** 2)
 
-        path_theta = math.atan2(
-            self.goal_pose_y - self.robot_pose_y,
-            self.goal_pose_x - self.robot_pose_x)
-
-        goal_angle = path_theta - self.robot_pose_theta
-        if goal_angle > math.pi:
-            goal_angle -= 2 * math.pi
-
-        elif goal_angle < -math.pi:
-            goal_angle += 2 * math.pi
-
         self.goal_distance = goal_distance
-        self.goal_angle = goal_angle
 
     def calculate_state(self):
         """
@@ -185,8 +193,8 @@ class RLEnvironment(Node):
         :return:
         """
         state = list()
-        state.append(float(self.goal_distance))
-        state.append(float(self.goal_angle))
+        state.append(float(self.goal_pose_x))
+        state.append(float(self.goal_pose_y))
         for var in self.scan_ranges:
             state.append(float(var))
         self.local_step += 1
@@ -209,9 +217,10 @@ class RLEnvironment(Node):
             self.local_step = 0
             self.call_task_failed()
 
-        if self.local_step == 500:
+        if self.local_step == self.time_out:
             self.get_logger().info("Time out!")
             self.done = True
+            self.fail = True
             self.local_step = 0
             self.call_task_failed()
 
@@ -222,26 +231,22 @@ class RLEnvironment(Node):
         calculates the reward accumulating by agent after doing each action, feel free to change the reward function
         :return:
         """
-        yaw_reward = 1 - 2 * math.sqrt(math.fabs(self.goal_angle / math.pi))
-
-        distance_reward = (2 * self.init_goal_distance) / \
-                          (self.init_goal_distance + self.goal_distance) - 1
 
         # Reward for avoiding obstacles
-        if self.min_obstacle_distance < 0.25:
-            obstacle_reward = -2
+        if self.min_obstacle_distance < 0.45:
+            obstacle_reward = 5*(self.min_obstacle_distance-0.45)
         else:
             obstacle_reward = 0
 
-        reward = yaw_reward + distance_reward + obstacle_reward
+        reward = -0.5 + obstacle_reward
 
         # + for succeed, - for fail
         if self.succeed:
-            reward += 5
+            reward += 10
         elif self.fail:
-            reward -= -10
-        # self.get_logger().info('reward:{}'.format(reward))
+            reward -= 5
 
+        self.get_logger().info('reward: %f' % reward)
         return reward
 
     def rl_agent_interface_callback(self, request, response):
@@ -271,11 +276,6 @@ class RLEnvironment(Node):
             self.done = False
             self.succeed = False
             self.fail = False
-
-        if request.init is True:
-            self.init_goal_distance = math.sqrt(
-                (self.goal_pose_x - self.robot_pose_x) ** 2
-                + (self.goal_pose_y - self.robot_pose_y) ** 2)
 
         return response
 

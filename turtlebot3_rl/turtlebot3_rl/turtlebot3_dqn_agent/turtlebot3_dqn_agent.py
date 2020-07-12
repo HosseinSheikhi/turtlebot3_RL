@@ -29,6 +29,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from turtlebot3_msgs.srv import Dqn
+from std_srvs.srv import Empty
 
 import tensorflow as tf
 from tensorflow.keras.layers import Dense
@@ -73,18 +74,18 @@ class DQNAgent(Node):
         self.stage = int(stage)
 
         # State size and action size
-        self.state_size = 26  # 24 lidar rays + 1 distance to goal + 1 angle to goal
+        self.state_size = 14  # 12 lidar rays
         self.action_size = 5
-        self.max_training_episodes = 500
+        self.max_training_episodes = 1000
 
         # DQN hyperparameter
         self.discount_factor = 0.99
         self.learning_rate = 0.001
         self.epsilon = 1.0
         self.step_counter = 0
-        self.epsilon_decay = 1000 * self.stage
+        self.epsilon_decay = 10000 * self.stage
         self.epsilon_min = 0.05
-        self.batch_size = 32
+        self.batch_size = 64
 
         # Replay memory
         self.replay_memory = collections.deque(maxlen=500000)
@@ -94,7 +95,7 @@ class DQNAgent(Node):
         self.model = self.create_qnetwork()
         self.target_model = self.create_qnetwork()
         self.update_target_model()
-        self.update_target_after = 1000
+        self.update_target_after = 2000
         self.target_update_after_counter = 0
 
         # Load saved models
@@ -123,7 +124,8 @@ class DQNAgent(Node):
         ************************************************************"""
         # Initialise clients
         self.rl_agent_interface_client = self.create_client(Dqn, 'rl_agent_interface')
-
+        self.make_environment_client = self.create_client(Empty, 'make_environment')
+        self.reset_environment_client = self.create_client(Dqn, 'reset_environment')
         """************************************************************
         ** Start process
         ************************************************************"""
@@ -134,79 +136,49 @@ class DQNAgent(Node):
     *******************************************************************************"""
 
     def process(self):
+        self.env_make()
+        time.sleep(1.0)
+
         episode_num = 0
 
         for episode in range(self.load_episode + 1, self.max_training_episodes):
             episode_num += 1
             local_step = 0
-
-            state = list()
-            next_state = list()
-            done = False
-            init = True
             score = 0
 
             # Reset DQN environment
+            state = self.reset_environment()
+            print(state)
             time.sleep(1.0)
 
-            while not done:
+            while True:
                 local_step += 1
+                action = int(self.get_action(state))
 
-                # Aciton based on the current state
-                if local_step == 1:
-                    action = 2  # Move forward
-                else:
-                    state = next_state
-                    action = int(self.get_action(state))
+                next_state, reward, done = self.step(action)
+                score += reward
 
-                # Send action and receive next state and reward
-                req = Dqn.Request()
-                req.action = action
-                #self.get_logger().info('action: %d' % (action))
-                req.init = init
-                while not self.rl_agent_interface_client.wait_for_service(timeout_sec=1.0):
-                    self.get_logger().info('service not available, waiting again...')
+                self.append_sample((state, action, reward, next_state, done))
 
-                future = self.rl_agent_interface_client.call_async(req)
+                self.train_model(done)
+                state = next_state
+                if done:
+                    if LOGGING:
+                        self.dqn_reward_metric.update_state(score)
+                        with self.dqn_reward_writer.as_default():
+                            tf.summary.scalar('dqn_reward', self.dqn_reward_metric.result(), step=episode_num)
+                        self.dqn_reward_metric.reset_states()
 
-                while rclpy.ok():
-                    rclpy.spin_once(self)
-                    if future.done():
-                        if future.result() is not None:
-                            # Next state and reward
-                            next_state = future.result().state
-                            next_state = np.reshape(np.asarray(next_state), [1, self.state_size])
-                            reward = future.result().reward
-                            done = future.result().done
-                            score += reward
-                            init = False
-                        else:
-                            self.get_logger().error(
-                                'Exception while calling service: {0}'.format(future.exception()))
-                        break
+                    print(
+                        "Episode:", episode,
+                        "score:", score,
+                        "memory length:", len(self.replay_memory),
+                        "epsilon:", self.epsilon)
 
-                # Save <s, a, r, s'> samples
-                if local_step > 1:
-                    self.append_sample((state, action, reward, next_state, done))
-
-                    self.train_model(done)
-
-                    if done:
-                        if LOGGING:
-                            self.dqn_reward_metric.update_state(score)
-                            with self.dqn_reward_writer.as_default():
-                                tf.summary.scalar('dqn_reward', self.dqn_reward_metric.result(), step=episode_num)
-                            self.dqn_reward_metric.reset_states()
-
-                        print(
-                            "Episode:", episode,
-                            "score:", score,
-                            "memory length:", len(self.replay_memory),
-                            "epsilon:", self.epsilon)
-
-                        param_keys = ['epsilon']
-                        param_values = [self.epsilon]
-                        param_dictionary = dict(zip(param_keys, param_values))
+                    param_keys = ['epsilon']
+                    param_values = [self.epsilon]
+                    param_dictionary = dict(zip(param_keys, param_values))
+                    break
 
                 # While loop rate
                 time.sleep(0.01)
@@ -221,6 +193,51 @@ class DQNAgent(Node):
                         self.model_dir_path,
                         'stage' + str(self.stage) + '_episode' + str(episode) + '.json'), 'w') as outfile:
                     json.dump(param_dictionary, outfile)
+
+    def env_make(self):
+        while not self.make_environment_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Environment make client failed to connect to the server, try again ...')
+
+        self.make_environment_client.call_async(Empty.Request())
+
+    def reset_environment(self):
+        while not self.reset_environment_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Reset environment client failed to connect to the server, try again ...')
+
+        future = self.reset_environment_client.call_async(Dqn.Request())
+
+        rclpy.spin_until_future_complete(self, future)
+        if future.result() is not None:
+            state = future.result().state
+            state = np.reshape(np.asarray(state), [1, self.state_size])
+        else:
+            self.get_logger().error(
+                'Exception while calling service: {0}'.format(future.exception()))
+
+        return state
+
+    def step(self, action):
+        # Send action and receive next state and reward
+        req = Dqn.Request()
+        req.action = action
+
+        while not self.rl_agent_interface_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('rl_agent interface service not available, waiting again...')
+
+        future = self.rl_agent_interface_client.call_async(req)
+
+        rclpy.spin_until_future_complete(self, future)
+
+        if future.result() is not None:
+            # Next state and reward
+            next_state = future.result().state
+            next_state = np.reshape(np.asarray(next_state), [1, self.state_size])
+            reward = future.result().reward
+            done = future.result().done
+        else:
+            self.get_logger().error(
+                'Exception while calling service: {0}'.format(future.exception()))
+        return next_state, reward, done
 
     def create_qnetwork(self):
         model = Sequential()
