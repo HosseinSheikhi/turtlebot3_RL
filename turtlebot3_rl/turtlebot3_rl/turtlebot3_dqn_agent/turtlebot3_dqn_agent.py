@@ -17,24 +17,24 @@
 # Authors: Ryan Shim, Gilbert
 
 import collections
+import datetime
+import json
+import math
+import os
+import random as rnd
+import sys
+import time
+import numpy as np
+
+import rclpy
+from rclpy.node import Node
+from turtlebot3_msgs.srv import Dqn
+
 import tensorflow as tf
-# from dqn_agent.log_metric import DQNMetric
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.models import load_model
 from tensorflow.keras.optimizers import Adam
-import json
-import numpy as np
-import random as rnd
-import math
-import os
-import sys
-import time
-import datetime
-import rclpy
-from rclpy.node import Node
-
-from turtlebot3_msgs.srv import Dqn
 
 tf.config.set_visible_devices([], 'GPU')
 
@@ -162,7 +162,7 @@ class DQNAgent(Node):
                 # Send action and receive next state and reward
                 req = Dqn.Request()
                 req.action = action
-                self.get_logger().info('action: %d' % (action))
+                #self.get_logger().info('action: %d' % (action))
                 req.init = init
                 while not self.rl_agent_interface_client.wait_for_service(timeout_sec=1.0):
                     self.get_logger().info('service not available, waiting again...')

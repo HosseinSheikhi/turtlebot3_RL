@@ -12,12 +12,19 @@ import sys
 
 
 class GazeboInterface(Node):
+    """
+        A node which acts as an interface between RL_Environment and the Simulator (turtlebot3_gazebo)
+
+        This nodes mostly receive requests (initializing the environment, task succeed, and task failed) from
+        RL_Environment, and gives response to this requests by sending requests to the simulator
+    """
+
     def __init__(self, stage):
         super().__init__('gazebo_interface')
         """**************************************************************
                             Initialize variables
         **************************************************************"""
-        # Environment stage
+        # Environment stage (could be 1, 2, 3, 4)
         self.stage = int(stage)
 
         # Read the 'Goal' Entity Model
@@ -29,7 +36,7 @@ class GazeboInterface(Node):
         self.entity_pose_y = 0.0
 
         """*************************************************************
-                Initialize publisher, clients and services
+                Initialize clients and services
         *************************************************************"""
 
         # Initialize clients
@@ -37,13 +44,20 @@ class GazeboInterface(Node):
         self.spawn_entity_client = self.create_client(SpawnEntity, 'spawn_entity')
         self.reset_simulation_client = self.create_client(Empty, 'reset_simulation')
 
-        self.clbk_grp = MutuallyExclusiveCallbackGroup()
         # Initialize services
-        self.initialize_env_service = self.create_service(Goal, 'initialize_env', self.initialize_env_callback, callback_group=self.clbk_grp)
-        self.task_succeed_service = self.create_service(Goal, 'task_succeed', self.task_succeed_callback, callback_group=self.clbk_grp)
-        self.task_failed_service = self.create_service(Goal, 'task_failed', self.task_failed_callback, callback_group=self.clbk_grp)
+        self.callback_group = MutuallyExclusiveCallbackGroup()
+        self.initialize_env_service = self.create_service(Goal, 'initialize_env', self.initialize_env_callback,
+                                                          callback_group=self.callback_group)
+        self.task_succeed_service = self.create_service(Goal, 'task_succeed', self.task_succeed_callback,
+                                                        callback_group=self.callback_group)
+        self.task_failed_service = self.create_service(Goal, 'task_failed', self.task_failed_callback,
+                                                       callback_group=self.callback_group)
 
     def open_entity(self):
+        """
+        find the path to the goal_box model and loads it
+
+        """
         entity_dir_path = os.path.dirname(os.path.realpath(__file__))
         entity_dir_path = entity_dir_path.replace(
             'turtlebot3_rl/turtlebot3_rl/turtlebot3_gazebo',
@@ -53,6 +67,10 @@ class GazeboInterface(Node):
         self.entity = open(entity_path, 'r').read()
 
     def reset_simulation(self):
+        """
+        Sends a request to the gazebo service to reset the simulaotr
+        This method mostly will be called upon a task failed request from RL_environment
+        """
         reset_req = Empty.Request()
 
         # check connection to the service server
@@ -62,6 +80,10 @@ class GazeboInterface(Node):
         self.reset_simulation_client.call_async(reset_req)
 
     def delete_entity(self):
+        """
+        Deletes the goal_box entity by sending a request to the gazebo srvice
+        This method mostly will be called upon a task success and a task failed request from RL_environment
+        """
         delete_req = DeleteEntity.Request()
         delete_req.name = self.entity_name
 
@@ -69,9 +91,14 @@ class GazeboInterface(Node):
         while not self.delete_entity_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn('service for delete_entity is not available, waiting ...')
 
-        self.delete_entity_client.call_async(delete_req)
+        future = self.delete_entity_client.call_async(delete_req)
+        rclpy.spin_until_future_complete(self, future)
 
     def spawn_entity(self):
+        """
+        Spawns the goal_box entity by sending a request to the gazebo server
+        This method mostly will be called upon a task success and a task failed request from RL_environment
+        """
         entity_pose = Pose()
         entity_pose.position.x = self.entity_pose_x
         entity_pose.position.y = self.entity_pose_y
@@ -85,9 +112,16 @@ class GazeboInterface(Node):
         while not self.spawn_entity_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn('service for spawn_entity is not available, waiting ...')
 
-        self.spawn_entity_client.call_async(spawn_req)
+        future = self.spawn_entity_client.call_async(spawn_req)
+        rclpy.spin_until_future_complete(self, future)
 
     def task_succeed_callback(self, request, response):
+        """
+        when a task is succeed (goal is reached), a request will be called from RL_environment
+        This method has to call some functions to sends back the response (position of the new goal) to the client
+        :param request: Empty
+        :param response: Position of the new generated goal
+        """
         self.delete_entity()
         self.generate_goal_pose()
         self.spawn_entity()
@@ -98,6 +132,12 @@ class GazeboInterface(Node):
         return response
 
     def task_failed_callback(self, request, response):
+        """
+        when a task is failed (either a collision happened or timeout reached), a request will be called from RL_environment
+        This method has to call some functions to sends back the response (position of the new goal) to the client
+        :param request: Empty
+        :param response: Position of the new generated goal
+        """
         self.delete_entity()
         self.reset_simulation()
         self.generate_goal_pose()
@@ -109,6 +149,11 @@ class GazeboInterface(Node):
         return response
 
     def initialize_env_callback(self, request, response):
+        """
+        The RL_environment sends a request for initializing the environment
+        :param request: Empty
+        :param response: Position of the generated goal which will be [0.5, 0]
+        """
         self.delete_entity()
         self.reset_simulation()
         self.spawn_entity()
@@ -119,6 +164,10 @@ class GazeboInterface(Node):
         return response
 
     def generate_goal_pose(self):
+        """
+        generates a random position for the goal if stage 1, 2 and 3
+        if stage 4 is called will choose from predefined positions
+        """
         if self.stage != 4:
             self.entity_pose_x = random.randrange(-15, 16) / 10
             self.entity_pose_y = random.randrange(-15, 16) / 10
@@ -134,8 +183,8 @@ def main(args=sys.argv[1]):
     rclpy.init(args=args)
     gazebo_interface = GazeboInterface(args)
     while True:
-        rclpy.spin_once(gazebo_interface,timeout_sec=0.1)
-        #gazebo_interface.get_logger().info('iterate')
+        rclpy.spin_once(gazebo_interface, timeout_sec=0.1)
+
     rclpy.shutdown()
 
 

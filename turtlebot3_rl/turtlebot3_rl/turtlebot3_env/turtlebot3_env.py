@@ -5,20 +5,21 @@ from sensor_msgs.msg import LaserScan
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, qos_profile_sensor_data
-
-from std_srvs.srv import Empty
-import sys
 from turtlebot3_msgs.srv import Dqn
 from turtlebot3_msgs.srv import Goal
-from turtlebot3_rl.turtlebot3_gazebo import turtlebot3_gazebo
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+
 import numpy as np
 import math
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+
+
 class RLEnvironment(Node):
+    """
+    A node which has to act as an interface between (rl_agent and simulator_agent)
+    It has to implement make(), step(), and reset() like as an environment implemented in OpenAI gym
+    """
     def __init__(self):
         super().__init__('rl_environment')
-
         """**************************************************************
                                 Initialize variables
         **************************************************************"""
@@ -51,19 +52,15 @@ class RLEnvironment(Node):
         # Initialize publisher
         self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', qos)
 
-        self.subscriper_grp = MutuallyExclusiveCallbackGroup()
         # Initialize subscribers
         self.odom_sub = self.create_subscription(Odometry, 'odom', self.odom_sub_callback, qos)
         self.scan_sub = self.create_subscription(LaserScan, 'scan', self.scan_sub_callback, qos_profile_sensor_data)
 
         # Initialize client
-        self.a = MutuallyExclusiveCallbackGroup()
-        self.b = MutuallyExclusiveCallbackGroup()
-        self.c = MutuallyExclusiveCallbackGroup()
-
-        self.task_succeed_client = self.create_client(Goal, 'task_succeed',callback_group=self.a)
-        self.task_failed_client = self.create_client(Goal, 'task_failed',callback_group=self.a)
-        self.initialize_environment_client = self.create_client(Goal, 'initialize_env',callback_group=self.a)
+        self.clients_callback_group = MutuallyExclusiveCallbackGroup()
+        self.task_succeed_client = self.create_client(Goal, 'task_succeed', callback_group=self.clients_callback_group)
+        self.task_failed_client = self.create_client(Goal, 'task_failed', callback_group=self.clients_callback_group)
+        self.initialize_environment_client = self.create_client(Goal, 'initialize_env', callback_group=self.clients_callback_group)
 
         # Initialize service
         self.rl_agent_interface_service = self.create_service(Dqn, 'rl_agent_interface',
@@ -73,7 +70,11 @@ class RLEnvironment(Node):
         self.initialize_environment()
 
     def initialize_environment(self):
-
+        """
+        When the node is instantiated this client will send a request to the gazebo_interface service
+        the client waits until gets back the response (goal position) form service
+        :return:
+        """
         while not self.initialize_environment_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn('service for initialize the environment is not available, waiting ...')
 
@@ -90,6 +91,11 @@ class RLEnvironment(Node):
             self.get_logger().info('goal initialized at [%f, %f]' % (self.goal_pose_x, self.goal_pose_y))
 
     def call_task_succeed(self):
+        """
+        When the task is succeed (by reaching the goal) this client will send a request to the gazebo_interface service
+        the client waits until gets back the response (goal position) form service
+        :return:
+        """
         while not self.task_succeed_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn('service for task succeed is not available, waiting ...')
 
@@ -105,9 +111,12 @@ class RLEnvironment(Node):
         else:
             self.get_logger().error('task succeed service call failed')
 
-
-
     def call_task_failed(self):
+        """
+        When the task is failed (either collision or timeout) this client will send a request to the gazebo_interface service
+        the client waits until gets back the response (goal position) form service
+        :return:
+        """
         while not self.task_failed_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn('service for task failed is not available, waiting ...')
 
@@ -122,8 +131,12 @@ class RLEnvironment(Node):
         else:
             self.get_logger().error('task failed service call failed')
 
-
     def scan_sub_callback(self, scan):
+        """
+        subscribes to the laser scanned message
+        :param scan: laser scanner message
+        :return:
+        """
         self.scan_ranges = []  # clear the list
         num_of_lidar_rays = len(scan.ranges)
 
@@ -138,6 +151,11 @@ class RLEnvironment(Node):
         self.min_obstacle_distance = min(self.scan_ranges)
 
     def odom_sub_callback(self, msg):
+        """
+        subscribes to the robots odometry message and calculates the robots distance and heading angle to the goal
+        :param msg: robot pose and orientation massage
+        :return:
+        """
         self.robot_pose_x = msg.pose.pose.position.x
         self.robot_pose_y = msg.pose.pose.position.y
         _, _, self.robot_pose_theta = self.euler_from_quaternion(msg.pose.pose.orientation)
@@ -161,16 +179,21 @@ class RLEnvironment(Node):
         self.goal_angle = goal_angle
 
     def calculate_state(self):
+        """
+        calculates the robot state (lidar rays , distance to the goal ,robots heading angle toward the goal)
+        Checks the task succeed and the task failed
+        :return:
+        """
         state = list()
         state.append(float(self.goal_distance))
         state.append(float(self.goal_angle))
         for var in self.scan_ranges:
             state.append(float(var))
         self.local_step += 1
-        #print(self.min_obstacle_distance)
+
         # Succeed
         if self.goal_distance < 0.20:  # unit: m
-            print("Goal Reached")
+            self.get_logger().info("Goal Reached")
             self.succeed = True
             self.done = True
             self.cmd_vel_pub.publish(Twist())  # robot stop
@@ -179,7 +202,7 @@ class RLEnvironment(Node):
 
         # Fail
         if self.min_obstacle_distance < 0.25:  # unit: m
-            print("Collision happened")
+            self.get_logger().info("Collision happened")
             self.fail = True
             self.done = True
             self.cmd_vel_pub.publish(Twist())  # robot stop
@@ -187,7 +210,7 @@ class RLEnvironment(Node):
             self.call_task_failed()
 
         if self.local_step == 500:
-            print("Time out! :(")
+            self.get_logger().info("Time out!")
             self.done = True
             self.local_step = 0
             self.call_task_failed()
@@ -195,6 +218,10 @@ class RLEnvironment(Node):
         return state
 
     def calculate_reward(self):
+        """
+        calculates the reward accumulating by agent after doing each action, feel free to change the reward function
+        :return:
+        """
         yaw_reward = 1 - 2 * math.sqrt(math.fabs(self.goal_angle / math.pi))
 
         distance_reward = (2 * self.init_goal_distance) / \
@@ -213,11 +240,18 @@ class RLEnvironment(Node):
             reward += 5
         elif self.fail:
             reward -= -10
-        #print('reward:{}'.format(reward))
+        # self.get_logger().info('reward:{}'.format(reward))
 
         return reward
 
     def rl_agent_interface_callback(self, request, response):
+        """
+        gives service to the rl_agent. The rl_agent sends an action as a request and this methods has to does the action
+        and gets back the state, reward and done as a response
+        :param request: a DQN request including action
+        :param response: a DQN response including state, reward, and done
+        :return:
+        """
         action = request.action
         twist = Twist()
         twist.linear.x = 0.3
@@ -225,11 +259,9 @@ class RLEnvironment(Node):
         self.cmd_vel_pub.publish(twist)
         if self.stop_cmd_vel_timer is None:
             self.stop_cmd_vel_timer = self.create_timer(1.2, self.timer_callback)
-            # self.get_logger().info('Time was none')
         else:
             self.destroy_timer(self.stop_cmd_vel_timer)
             self.stop_cmd_vel_timer = self.create_timer(1.2, self.timer_callback)
-            # self.get_logger().info('Timer was not none')
 
         response.state = self.calculate_state()
         response.reward = self.calculate_reward()
@@ -248,6 +280,10 @@ class RLEnvironment(Node):
         return response
 
     def timer_callback(self):
+        """
+        after each self.stop_cmd_vel_timer seconds, this method will be called to send a stop cmd_vel to the robot
+        :return:
+        """
         self.get_logger().info('Stop called')
         self.cmd_vel_pub.publish(Twist())
         self.destroy_timer(self.stop_cmd_vel_timer)
@@ -255,8 +291,10 @@ class RLEnvironment(Node):
     def euler_from_quaternion(self, quat):
         """
         Converts quaternion (w in last place) to euler roll, pitch, yaw
-        quat = [x, y, z, w]
+        :param quat: [x, y, z, w]
+        :return:
         """
+
         x = quat.x
         y = quat.y
         z = quat.z
@@ -276,11 +314,10 @@ class RLEnvironment(Node):
         return roll, pitch, yaw
 
 
-def main(args=sys.argv[1]):
+def main(args=None):
     rclpy.init(args=args)
 
     rl_environment = RLEnvironment()
-
 
     while True:
         rclpy.spin_once(rl_environment)
