@@ -88,7 +88,7 @@ class DQNAgent(Node):
         self.batch_size = 64
 
         # Replay memory
-        self.replay_memory = collections.deque(maxlen=500000)
+        self.replay_memory = collections.deque(maxlen=50000)
         self.min_replay_memory_size = 500
 
         # Build model and target model
@@ -97,6 +97,10 @@ class DQNAgent(Node):
         self.update_target_model()
         self.update_target_after = 2000
         self.target_update_after_counter = 0
+
+        # data augmentation
+        self.alpha = 0.8
+        self.beta = 1.2
 
         # Load saved models
         self.load_model = False
@@ -268,17 +272,23 @@ class DQNAgent(Node):
     def append_sample(self, transition):
         self.replay_memory.append(transition)
 
+    def augment_amplitude_scaling(self, states_in_batch):
+        z = np.random.uniform(self.alpha, self.beta, size=states_in_batch.shape)
+        return states_in_batch * z
+
     def train_model(self, terminal):
         if len(self.replay_memory) < self.min_replay_memory_size:
             return
         data_in_mini_batch = rnd.sample(self.replay_memory, self.batch_size)
 
         current_states = np.array([transition[0] for transition in data_in_mini_batch])
-        current_states = current_states.squeeze()
+        #current_states = current_states.squeeze()
+        current_states = self.augment_amplitude_scaling(current_states)
         current_qvalues_list = self.model.predict(current_states)
 
         next_states = np.array([transition[3] for transition in data_in_mini_batch])
         next_states = next_states.squeeze()
+        #next_states = self.augment_amplitude_scaling(next_states)
         next_qvalues_list = self.target_model.predict(next_states)
 
         x_train = []
