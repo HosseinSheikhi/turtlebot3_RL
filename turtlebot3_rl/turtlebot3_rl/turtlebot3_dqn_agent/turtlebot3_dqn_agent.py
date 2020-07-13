@@ -76,19 +76,19 @@ class DQNAgent(Node):
         # State size and action size
         self.state_size = 14  # 12 lidar rays
         self.action_size = 5
-        self.max_training_episodes = 1000
+        self.max_training_episodes = 1500
 
         # DQN hyperparameter
         self.discount_factor = 0.99
         self.learning_rate = 0.001
-        self.epsilon = 1.0
+        self.epsilon = 0.50
         self.step_counter = 0
         self.epsilon_decay = 10000 * self.stage
         self.epsilon_min = 0.05
         self.batch_size = 64
 
         # Replay memory
-        self.replay_memory = collections.deque(maxlen=500000)
+        self.replay_memory = collections.deque(maxlen=50000)
         self.min_replay_memory_size = 500
 
         # Build model and target model
@@ -99,8 +99,8 @@ class DQNAgent(Node):
         self.target_update_after_counter = 0
 
         # Load saved models
-        self.load_model = False
-        self.load_episode = 0
+        self.load_model = True
+        self.load_episode = 980
         self.model_dir_path = os.path.dirname(os.path.realpath(__file__))
         self.model_dir_path = self.model_dir_path.replace('turtlebot3_dqn/dqn_agent', 'model')
         self.model_path = os.path.join(self.model_dir_path,
@@ -112,7 +112,7 @@ class DQNAgent(Node):
                                    'stage' + str(self.stage) + '_episode' + str(
                                        self.load_episode) + '.json')) as outfile:
                 param = json.load(outfile)
-                self.epsilon = param.get('epsilon')
+                #self.epsilon = param.get('epsilon')
 
         # Tensorboard Log
         if LOGGING:
@@ -257,7 +257,7 @@ class DQNAgent(Node):
 
     def get_action(self, state):
         self.step_counter += 1
-        self.epsilon = self.epsilon_min + (1 - self.epsilon_min) * math.exp(
+        self.epsilon = self.epsilon_min + (0.5 - self.epsilon_min) * math.exp(
             -1.0 * self.step_counter / self.epsilon_decay)
         lucky = rnd.random()
         if lucky > (1 - self.epsilon):
