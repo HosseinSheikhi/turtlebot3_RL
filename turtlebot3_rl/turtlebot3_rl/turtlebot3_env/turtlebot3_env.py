@@ -37,7 +37,7 @@ class RLEnvironment(Node):
         self.time_out = 300
         self.goal_angle = 0.0
         self.goal_distance = 1.0
-        self.init_goal_distance = 0.25
+        self.init_goal_distance = 0.5
         self.scan_ranges = []
         self.min_obstacle_distance = 10.0
 
@@ -209,7 +209,7 @@ class RLEnvironment(Node):
             self.call_task_succeed()
 
         # Fail
-        if self.min_obstacle_distance < 0.25:  # unit: m
+        if self.min_obstacle_distance < 0.23:  # unit: m
             self.get_logger().info("Collision happened")
             self.fail = True
             self.done = True
@@ -232,19 +232,23 @@ class RLEnvironment(Node):
         :return:
         """
 
+        yaw_reward = 1 - 2 * math.sqrt(math.fabs(self.goal_angle / math.pi))
+
+        distance_reward = (2 * self.init_goal_distance) / \
+                          (self.init_goal_distance + self.goal_distance) - 1
         # Reward for avoiding obstacles
         if self.min_obstacle_distance < 0.45:
-            obstacle_reward = 5*(self.min_obstacle_distance-0.45)
+            obstacle_reward = 5 * (self.min_obstacle_distance - 0.45)
         else:
             obstacle_reward = 0
 
-        reward = -0.5 + obstacle_reward
+        reward = obstacle_reward + distance_reward + yaw_reward
 
         # + for succeed, - for fail
         if self.succeed:
-            reward += 10
+            reward = 10
         elif self.fail:
-            reward -= 5
+            reward = 10
 
         self.get_logger().info('reward: %f' % reward)
         return reward

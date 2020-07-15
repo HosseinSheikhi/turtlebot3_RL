@@ -74,18 +74,18 @@ class DQNAgent(Node):
         self.stage = int(stage)
 
         # State size and action size
-        self.state_size = 14  # 12 lidar rays
+        self.state_size = 26  # 24 lidar rays
         self.action_size = 5
-        self.max_training_episodes = 1500
+        self.max_training_episodes = 300
 
         # DQN hyperparameter
         self.discount_factor = 0.99
-        self.learning_rate = 0.001
-        self.epsilon = 0.50
+        self.learning_rate = 0.0007
+        self.epsilon = 1.0
         self.step_counter = 0
-        self.epsilon_decay = 10000 * self.stage
+        self.epsilon_decay = 5000 * self.stage
         self.epsilon_min = 0.05
-        self.batch_size = 64
+        self.batch_size = 128
 
         # Replay memory
         self.replay_memory = collections.deque(maxlen=50000)
@@ -99,8 +99,8 @@ class DQNAgent(Node):
         self.target_update_after_counter = 0
 
         # Load saved models
-        self.load_model = True
-        self.load_episode = 980
+        self.load_model = False
+        self.load_episode = 0
         self.model_dir_path = os.path.dirname(os.path.realpath(__file__))
         self.model_dir_path = self.model_dir_path.replace('turtlebot3_dqn/dqn_agent', 'model')
         self.model_path = os.path.join(self.model_dir_path,
@@ -112,7 +112,7 @@ class DQNAgent(Node):
                                    'stage' + str(self.stage) + '_episode' + str(
                                        self.load_episode) + '.json')) as outfile:
                 param = json.load(outfile)
-                #self.epsilon = param.get('epsilon')
+                self.epsilon = param.get('epsilon')
 
         # Tensorboard Log
         if LOGGING:
@@ -243,7 +243,7 @@ class DQNAgent(Node):
         model = Sequential()
         model.add(Dense(256, input_shape=(self.state_size,), activation='relu'))
         model.add(Dense(128, activation='relu'))
-        model.add(Dense(128, activation='relu'))
+        #model.add(Dense(128, activation='relu'))
         model.add(Dense(self.action_size, activation='linear'))
         model.compile(loss='mse', optimizer=Adam(lr=self.learning_rate))
         model.summary()
