@@ -29,17 +29,19 @@ class RLEnvironment(Node):
         self.goal_pose_y = 0.0
         self.robot_pose_x = 0.0
         self.robot_pose_y = 0.0
+        self.robot_pose_theta = 0.0
 
         self.action_size = 5
         self.done = False
         self.fail = False
         self.succeed = False
-        self.time_out = 300
+        self.time_out = 500
         self.goal_angle = 0.0
         self.goal_distance = 1.0
         self.init_goal_distance = 0.5
         self.scan_ranges = []
         self.min_obstacle_distance = 10.0
+        self.min_obstacle_angle = 10.0
 
         self.local_step = 0
 
@@ -179,12 +181,25 @@ class RLEnvironment(Node):
         """
         self.robot_pose_x = msg.pose.pose.position.x
         self.robot_pose_y = msg.pose.pose.position.y
+        _, _, self.robot_pose_theta = self.euler_from_quaternion(msg.pose.pose.orientation)
 
         goal_distance = math.sqrt(
             (self.goal_pose_x - self.robot_pose_x) ** 2
             + (self.goal_pose_y - self.robot_pose_y) ** 2)
 
+        path_theta = math.atan2(
+            self.goal_pose_y - self.robot_pose_y,
+            self.goal_pose_x - self.robot_pose_x)
+
+        goal_angle = path_theta - self.robot_pose_theta
+        if goal_angle > math.pi:
+            goal_angle -= 2 * math.pi
+
+        elif goal_angle < -math.pi:
+            goal_angle += 2 * math.pi
+
         self.goal_distance = goal_distance
+        self.goal_angle = goal_angle
 
     def calculate_state(self):
         """
@@ -193,8 +208,10 @@ class RLEnvironment(Node):
         :return:
         """
         state = list()
-        state.append(float(self.goal_pose_x))
-        state.append(float(self.goal_pose_y))
+        state.append(float(self.goal_distance))
+        state.append(float(self.goal_angle))
+        # state.append(float(self.goal_pose_x / 2))
+        # state.append(float(self.goal_pose_y / 2))
         for var in self.scan_ranges:
             state.append(float(var))
         self.local_step += 1
@@ -231,7 +248,6 @@ class RLEnvironment(Node):
         calculates the reward accumulating by agent after doing each action, feel free to change the reward function
         :return:
         """
-
         yaw_reward = 1 - 2 * math.sqrt(math.fabs(self.goal_angle / math.pi))
 
         distance_reward = (2 * self.init_goal_distance) / \
@@ -246,9 +262,9 @@ class RLEnvironment(Node):
 
         # + for succeed, - for fail
         if self.succeed:
-            reward = 10
+            reward = 10.0
         elif self.fail:
-            reward = 10
+            reward = 10.0
 
         self.get_logger().info('reward: %f' % reward)
         return reward
