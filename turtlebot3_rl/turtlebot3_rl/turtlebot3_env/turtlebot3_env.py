@@ -35,10 +35,10 @@ class RLEnvironment(Node):
         self.done = False
         self.fail = False
         self.succeed = False
-        self.time_out = 400
+        self.time_out = 500
         self.goal_angle = 0.0
         self.goal_distance = 1.0
-        self.init_goal_distance = 0.25
+        self.init_goal_distance = 0.5
         self.scan_ranges = []
         self.min_obstacle_distance = 10.0
         self.min_obstacle_angle = 10.0
@@ -183,7 +183,6 @@ class RLEnvironment(Node):
         self.robot_pose_y = msg.pose.pose.position.y
         _, _, self.robot_pose_theta = self.euler_from_quaternion(msg.pose.pose.orientation)
 
-
         goal_distance = math.sqrt(
             (self.goal_pose_x - self.robot_pose_x) ** 2
             + (self.goal_pose_y - self.robot_pose_y) ** 2)
@@ -211,8 +210,8 @@ class RLEnvironment(Node):
         state = list()
         state.append(float(self.goal_distance))
         state.append(float(self.goal_angle))
-        #state.append(float(self.goal_pose_x))
-        #state.append(float(self.goal_pose_y))
+        # state.append(float(self.goal_pose_x / 2))
+        # state.append(float(self.goal_pose_y / 2))
         for var in self.scan_ranges:
             state.append(float(var))
         self.local_step += 1
@@ -227,7 +226,7 @@ class RLEnvironment(Node):
             self.call_task_succeed()
 
         # Fail
-        if self.min_obstacle_distance < 0.25:  # unit: m
+        if self.min_obstacle_distance < 0.23:  # unit: m
             self.get_logger().info("Collision happened")
             self.fail = True
             self.done = True
@@ -255,17 +254,17 @@ class RLEnvironment(Node):
                           (self.init_goal_distance + self.goal_distance) - 1
         # Reward for avoiding obstacles
         if self.min_obstacle_distance < 0.45:
-            obstacle_reward = 5*(self.min_obstacle_distance-0.45)
+            obstacle_reward = 5 * (self.min_obstacle_distance - 0.45)
         else:
             obstacle_reward = 0
 
-        reward = -0.5 + obstacle_reward + yaw_reward + distance_reward
+        reward = obstacle_reward + distance_reward + yaw_reward
 
         # + for succeed, - for fail
         if self.succeed:
-            reward += 10
+            reward = 10.0
         elif self.fail:
-            reward -= 5
+            reward = 10.0
 
         self.get_logger().info('reward: %f' % reward)
         return reward
