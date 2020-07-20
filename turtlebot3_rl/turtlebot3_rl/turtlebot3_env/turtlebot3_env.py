@@ -248,23 +248,24 @@ class RLEnvironment(Node):
         calculates the reward accumulating by agent after doing each action, feel free to change the reward function
         :return:
         """
-        yaw_reward = 1 - 2 * math.sqrt(math.fabs(self.goal_angle / math.pi))
+        #yaw_reward = 1 - 2 * math.sqrt(math.fabs(self.goal_angle / math.pi))
 
-        distance_reward = (2 * self.init_goal_distance) / \
-                          (self.init_goal_distance + self.goal_distance) - 1
+        #distance_reward = (2 * self.init_goal_distance) / \
+                          #(self.init_goal_distance + self.goal_distance) - 1
+        distance_reward = -(2.0/3.0)*(self.goal_distance-0.25)
         # Reward for avoiding obstacles
         if self.min_obstacle_distance < 0.45:
-            obstacle_reward = 5 * (self.min_obstacle_distance - 0.45)
+            obstacle_reward = 5.0 * (self.min_obstacle_distance - 0.45)
         else:
-            obstacle_reward = 0
+            obstacle_reward = 0.0
 
-        reward = obstacle_reward + distance_reward + yaw_reward
+        reward = obstacle_reward + distance_reward #+ yaw_reward
 
         # + for succeed, - for fail
         if self.succeed:
             reward = 10.0
         elif self.fail:
-            reward = 10.0
+            reward = -10.0
 
         self.get_logger().info('reward: %f' % reward)
         return reward
