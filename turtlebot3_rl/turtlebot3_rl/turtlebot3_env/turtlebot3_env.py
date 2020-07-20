@@ -45,6 +45,7 @@ class RLEnvironment(Node):
 
         self.stop_cmd_vel_timer = None
         self.angular_vel = [1.4, 0.7, 0.0, -0.7, -1.4]
+        self.action_reward = [-0.02, -0.015, 0.0, -0.015, -0.02]
         """************************************************************
                  Initialise publisher, subscribers, clients and services
         ************************************************************"""
@@ -220,33 +221,27 @@ class RLEnvironment(Node):
         if self.local_step == self.time_out:
             self.get_logger().info("Time out!")
             self.done = True
-            self.fail = True
+            #self.fail = True
             self.local_step = 0
             self.call_task_failed()
 
         return state
 
-    def calculate_reward(self):
+    def calculate_reward(self, action):
         """
         calculates the reward accumulating by agent after doing each action, feel free to change the reward function
         :return:
         """
 
-        # Reward for avoiding obstacles
-        if self.min_obstacle_distance < 0.45:
-            obstacle_reward = 5*(self.min_obstacle_distance-0.45)
-        else:
-            obstacle_reward = 0
-
-        reward = -0.5 + obstacle_reward
+        reward = self.action_reward[action]
 
         # + for succeed, - for fail
         if self.succeed:
-            reward += 10
+            reward = 10
         elif self.fail:
-            reward -= 5
+            reward = -10
 
-        self.get_logger().info('reward: %f' % reward)
+        #self.get_logger().info('reward: %f' % reward)
         return reward
 
     def rl_agent_interface_callback(self, request, response):
@@ -269,7 +264,7 @@ class RLEnvironment(Node):
             self.stop_cmd_vel_timer = self.create_timer(1.2, self.timer_callback)
 
         response.state = self.calculate_state()
-        response.reward = self.calculate_reward()
+        response.reward = self.calculate_reward(action)
         response.done = self.done
 
         if self.done is True:

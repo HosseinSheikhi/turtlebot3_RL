@@ -41,7 +41,7 @@ tf.config.set_visible_devices([], 'GPU')
 
 LOGGING = True
 current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-dqn_reward_log_dir = 'logs/gradient_tape/' + current_time + '/dqn_reward_1'
+dqn_reward_log_dir = 'logs/gradient_tape/' + current_time + '/dqn_stage_2'
 
 
 class DQNMetric(tf.keras.metrics.Metric):
@@ -74,21 +74,21 @@ class DQNAgent(Node):
         self.stage = int(stage)
 
         # State size and action size
-        self.state_size = 14  # 12 lidar rays
+        self.state_size = 26  # 12 lidar rays
         self.action_size = 5
-        self.max_training_episodes = 1500
+        self.max_training_episodes = 5000
 
         # DQN hyperparameter
         self.discount_factor = 0.99
-        self.learning_rate = 0.001
-        self.epsilon = 0.50
+        self.learning_rate = 0.0007
+        self.epsilon = 1.0
         self.step_counter = 0
-        self.epsilon_decay = 10000 * self.stage
+        self.epsilon_decay = 15000 * self.stage
         self.epsilon_min = 0.05
         self.batch_size = 64
 
         # Replay memory
-        self.replay_memory = collections.deque(maxlen=50000)
+        self.replay_memory = collections.deque(maxlen=100000)
         self.min_replay_memory_size = 500
 
         # Build model and target model
@@ -243,7 +243,7 @@ class DQNAgent(Node):
         model = Sequential()
         model.add(Dense(256, input_shape=(self.state_size,), activation='relu'))
         model.add(Dense(128, activation='relu'))
-        model.add(Dense(128, activation='relu'))
+        #model.add(Dense(128, activation='relu'))
         model.add(Dense(self.action_size, activation='linear'))
         model.compile(loss='mse', optimizer=Adam(lr=self.learning_rate))
         model.summary()
